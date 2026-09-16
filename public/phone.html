@@ -6,6 +6,7 @@
     <title>GPS Tracker - Pracownik</title>
     <!-- Biblioteka Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 40px; background: #222; color: white; }
         button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; }
@@ -25,6 +26,8 @@
     <div id="status">Status: Zatrzymany</div>
 
     <script>
+
+        const socket = io()
         // --- KONFIGURACJA SUPABASE ---
         const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
@@ -76,14 +79,15 @@
         }
 
         function wyslijNaZywo(imie, lat, lng) {
-            const czas = new Date().toLocaleTimeString('pl-PL');
-
-            fetch('/location', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imie, lat, lng, czas })
-            }).catch(err => console.error("Błąd transmisji Render:", err));
-        }
+    if (socket) {
+        socket.emit('updateLocation', {
+            name: imie,
+            lat: lat,
+            lng: lng,
+            time: Date.now()
+        });
+    }
+}
 
         function toggleTracking() {
             const btn = document.getElementById('toggleBtn');
