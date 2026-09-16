@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GPS Tracker - Pracownik</title>
+    <!-- Biblioteka Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 40px; background: #222; color: white; }
         button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; }
@@ -14,7 +16,7 @@
 <body>
 
     <h2>Panel Pracownika</h2>
-    <p>Wciśnij start, aby udostępniać swoją lokalizację szefowi.</p>
+    <p>Wciśnij start, aby udostępniać lokalizację na żywo oraz zarejestrować czas i trasę pracy.</p>
     
     <br>
     <input type="text" id="workerName" placeholder="Twoje imię (np. Jan Kowalski)" style="padding: 10px; width: 80%; max-width: 300px; margin-bottom: 15px;"><br>
@@ -23,53 +25,140 @@
     <div id="status">Status: Zatrzymany</div>
 
     <script>
+        // --- KONFIGURACJA SUPABASE ---
+        const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
         let watchId = null;
-        const workerId = "pracownik_" + Math.floor(Math.random() * 1000);
+        let lastLat = null;
+        let lastLng = null;
+        let przebytyDystansKm = 0;
+        let wejscieZapisane = false;
+
+        // Matematyczne przeliczanie różnicy współrzędnych na kilometry
+        function obliczDystans(lat1, lon1, lat2, lon2) {
+            const R = 6371; 
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // Zapis do Supabase z uwzględnieniem kolumny 'kilometry'
+        async function zapiszWbazie(typAkcji) {
+            const nameInput = document.getElementById('workerName').value.trim() || "Anonim";
+            
+            // Dla "Wejścia" dystans wynosi 0, dla "Wyjścia" zapisujemy pełną przebyta trasę
+            const dystansDoZapisu = (typAkcji === "Wejście") ? 0 : parseFloat(przebytyDystansKm.toFixed(2));
+
+            const { error } = await supabaseClient
+                .from('attendance')
+                .insert([
+                    { 
+                        imie_nazwisko: nameInput, 
+                        typ: typAkcji, 
+                        kilometry: dystansDoZapisu,
+                        szerokosc: lastLat, 
+                        dlugosc: lastLng 
+                    }
+                ]);
+
+            if (error) {
+                console.error("Błąd Supabase:", error);
+            } else {
+                console.log(`Supabase: Zapisano ${typAkcji} (${dystansDoZapisu} km)`);
+            }
+        }
+
+        function wyslijNaZywo(imie, lat, lng) {
+            const czas = new Date().toLocaleTimeString('pl-PL');
+
+            fetch('/location', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ imie, lat, lng, czas })
+            }).catch(err => console.error("Błąd transmisji Render:", err));
+        }
 
         function toggleTracking() {
             const btn = document.getElementById('toggleBtn');
             const statusDiv = document.getElementById('status');
-            const nameInput = document.getElementById('workerName').value || "Pracownik";
+            const workerName = document.getElementById('workerName').value.trim();
 
             if (watchId === null) {
-                if (!navigator.geolocation) {
-                    alert("Twoja przeglądarka nie wspiera GPS!");
+                if (!workerName) {
+                    alert("Wpisz swoje imię przed rozpoczęciem!");
                     return;
                 }
 
+                przebytyDystansKm = 0;
+                lastLat = null;
+                lastLng = null;
+
                 btn.textContent = "Zatrzymaj trasę";
                 btn.className = "stop";
-                statusDiv.textContent = "Status: Wysyłanie pozycji GPS...";
+                statusDiv.textContent = "Szukanie sygnału GPS...";
 
                 watchId = navigator.geolocation.watchPosition(
-                    (position) => {
-                        const lat = position.coords.latitude;
-                        const lng = position.coords.longitude;
+                    async (position) => {
+                        const newLat = position.coords.latitude;
+                        const newLng = position.coords.longitude;
                         
-                        statusDiv.innerHTML = `Status: W trasie<br>Szer: ${lat.toFixed(4)}, Dł: ${lng.toFixed(4)}`;
+                        // Naliczanie kilometrów przy przesunięciu pozycji
+                        if (lastLat !== null && lastLng !== null) {
+                            const d = obliczDystans(lastLat, lastLng, newLat, newLng);
+                            // Filtrowanie drobnego szumu GPS (zlicza ruch większy niż 5 metrów)
+                            if (d > 0.005) {
+                                przebytyDystansKm += d;
+                            }
+                        }
 
-                        fetch(`/update?id=${workerId}&name=${encodeURIComponent(nameInput)}&lat=${lat}&lng=${lng}`)
-                            .catch(err => console.error("Błąd wysyłania GPS:", err));
+                        lastLat = newLat;
+                        lastLng = newLng;
+                        
+                        statusDiv.innerHTML = `Status: W trasie<br>Przebyty dystans: <b>${przebytyDystansKm.toFixed(2)} km</b><br>Szer: ${lastLat.toFixed(4)}, Dł: ${lastLng.toFixed(4)}`;
+
+                        wyslijNaZywo(workerName, lastLat, lastLng);
+
+                        if (watchId && !wejscieZapisane) {
+                            wejscieZapisane = true;
+                            await zapiszWbazie("Wejście");
+                        }
                     },
                     (error) => {
                         alert("Błąd GPS: " + error.message);
                         stopTracking();
                     },
-                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
                 );
             } else {
                 stopTracking();
             }
         }
 
-        function stopTracking() {
+        async function stopTracking() {
             if (watchId !== null) {
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
             }
+
+            const statusDiv = document.getElementById('status');
+
+            if (wejscieZapisane) {
+                await zapiszWbazie("Wyjście");
+                wejscieZapisane = false;
+                statusDiv.textContent = `Status: Zatrzymany (Zapisano Wyjście, dystans: ${przebytyDystansKm.toFixed(2)} km)`;
+            } else {
+                statusDiv.textContent = "Status: Zatrzymany";
+            }
+
             document.getElementById('toggleBtn').textContent = "Rozpocznij jazdę";
             document.getElementById('toggleBtn').className = "";
-            document.getElementById('status').textContent = "Status: Zatrzymany";
         }
     </script>
 </body>

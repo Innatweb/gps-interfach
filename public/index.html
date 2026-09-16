@@ -12,7 +12,7 @@
 </head>
 <body>
 
-    <header>📍 System Śledzenia Floty Interfach - Radom i okolice (Z Historią Tras)</header>
+    <header>📍 System Śledzenia Floty Interfach - Radom i okolice (Z Historią Tras i Dystansem)</header>
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -28,33 +28,76 @@
 
         const socket = io();
         let markers = {};
-        let polylines = {}; // Słownik przechowujący linie trasy dla każdego pracownika
+        let polylines = {};
 
-        // Nasłuchiwanie na aktualizacje pozycji z serwera
+        // Obliczanie dystansu w km (Wzór Haversine)
+        function calculateTotalDistance(history) {
+            if (!history || history.length < 2) return (0).toFixed(2);
+            let totalKm = 0;
+            
+            function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+                const R = 6371;
+                const dLat = (lat2 - lat1) * (Math.PI / 180);
+                const dLon = (lon2 - lon1) * (Math.PI / 180);
+                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                          Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+                          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+            }
+
+            for (let i = 0; i < history.length - 1; i++) {
+                const p1 = history[i];
+                const p2 = history[i + 1];
+                const lat1 = Array.isArray(p1) ? p1[0] : p1.lat;
+                const lon1 = Array.isArray(p1) ? p1[1] : p1.lng;
+                const lat2 = Array.isArray(p2) ? p2[0] : p2.lat;
+                const lon2 = Array.isArray(p2) ? p2[1] : p2.lng;
+
+                totalKm += getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2);
+            }
+
+            return totalKm.toFixed(2);
+        }
+
         socket.on('updateMap', (workers) => {
+            // Czyszczenie obiektów nieaktywnych kierowców
+            for (let id in markers) {
+                if (!workers[id]) {
+                    map.removeLayer(markers[id]);
+                    delete markers[id];
+                }
+            }
+            for (let id in polylines) {
+                if (!workers[id]) {
+                    map.removeLayer(polylines[id]);
+                    delete polylines[id];
+                }
+            }
+
+            // Rysowanie i aktualizacja pozycji na mapie
             for (let id in workers) {
                 let worker = workers[id];
+                let distance = calculateTotalDistance(worker.history);
                 
-                // 1. Aktualizacja lub tworzenie markera (punktu)
+                let popupContent = `<b>${worker.name}</b><br>` +
+                                   `Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}<br>` +
+                                   `🚗 Przebyty dystans: <b>${distance} km</b>`;
+
                 if (markers[id]) {
                     markers[id].setLatLng([worker.lat, worker.lng]);
-                    markers[id].setPopupContent(`<b>${worker.name}</b><br>Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}`);
+                    markers[id].setPopupContent(popupContent);
                 } else {
-                    markers[id] = L.marker([worker.lat, worker.lng]).addTo(map)
-                        .bindPopup(`<b>${worker.name}</b><br>Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}`);
+                    markers[id] = L.marker([worker.lat, worker.lng]).addTo(map).bindPopup(popupContent);
                 }
 
-                // 2. Rysowanie / aktualizacja historii trasy (polilinia)
                 if (worker.history && worker.history.length > 0) {
                     if (polylines[id]) {
-                        // Jeśli linia już istnieje, aktualizujemy jej współrzędne
                         polylines[id].setLatLngs(worker.history);
                     } else {
-                        // Jeśli nie, tworzymy nową czerwoną linię na mapie
                         polylines[id] = L.polyline(worker.history, {
-                            color: 'red',
+                            color: '#e74c3c',
                             weight: 4,
-                            opacity: 0.7
+                            opacity: 0.8
                         }).addTo(map);
                     }
                 }
