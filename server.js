@@ -5,15 +5,16 @@ const sqlite3 = require('sqlite3').verbose();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: { origin: "*" }
+});
 
-// Inicjalizacja bazy danych SQLite (plik baza.db utworzy się automatycznie)
+// Inicjalizacja bazy danych SQLite
 const db = new sqlite3.Database('./baza.db', (err) => {
     if (err) {
-        console.error('Błąd otwierania bazy danych', err.message);
+        console.error('Błąd otwierania bazy danych:', err.message);
     } else {
         console.log('Połączono z bazą danych SQLite.');
-        // Tworzymy tabelę na dane pracowników, jeśli nie istnieje
         db.run(`CREATE TABLE IF NOT EXISTS workers (
             id TEXT PRIMARY KEY,
             name TEXT,
@@ -28,9 +29,9 @@ const db = new sqlite3.Database('./baza.db', (err) => {
 
 app.use(express.static('public'));
 
-// Funkcja do obliczania dystansu między dwoma punktami GPS (wzór Haversine) in km
+// Obliczanie dystansu w km (Haversine)
 function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Promień Ziemi w km
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = 
@@ -41,11 +42,11 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-// Pomocnicza funkcja do pobrania wszystkich pracowników z bazy i wysłania do taty
+// Wysyłanie aktualnych pozycji i historii z bazy danych do mapy
 function sendAllWorkers(socketOrIo) {
     db.all(`SELECT * FROM workers`, [], (err, rows) => {
         if (err) {
-            console.error(err);
+            console.error("Błąd pobierania z bazy:", err);
             return;
         }
         let workersLocations = {};
@@ -64,15 +65,23 @@ function sendAllWorkers(socketOrIo) {
     });
 }
 
-// Odbieranie pozycji z telefonu pracownika
-app.get('/update', (req, res) => {
-    const { id, name, lat, lng } = req.query;
-    if (id && lat && lng) {
+// OBSŁUGA POŁĄCZEŃ SOCKET.IO (Telefon + Mapa Admina)
+io.on('connection', (socket) => {
+    console.log('Połączono klienta Socket.io:', socket.id);
+    
+    // Wysyłamy istniejące dane zaraz po połączeniu
+    sendAllWorkers(socket);
+
+    // Odbieranie współrzędnych wysyłanych z phone.html
+    socket.on('updateLocation', (data) => {
+        const { name, lat, lng } = data;
+        const id = name || socket.id; 
         const parsedLat = parseFloat(lat);
         const parsedLng = parseFloat(lng);
         const currentTime = new Date().toISOString();
 
-        // Pobieramy aktualny stan pracownika z bazy, żeby obliczyć dystans i historię
+        if (!id || isNaN(parsedLat) || isNaN(parsedLng)) return;
+
         db.get(`SELECT * FROM workers WHERE id = ?`, [id], (err, row) => {
             let history = [];
             let totalDistance = 0;
@@ -85,21 +94,17 @@ app.get('/update', (req, res) => {
                 } catch(e) { history = []; }
                 totalDistance = row.totalDistance || 0;
 
-                // Jeśli mamy poprzedni punkt, liczymy odległość
                 if (history.length > 0) {
                     const lastPoint = history[history.length - 1];
                     const dist = calculateDistance(lastPoint[0], lastPoint[1], parsedLat, parsedLng);
-                    // Dodajemy tylko jeśli przesunął się o więcej niż 2 metry (eliminacja drgań GPS w miejscu)
-                    if (dist > 0.002) {
+                    if (dist > 0.002) { // Zapisujemy przesunięcia powyżej 2 metrów
                         totalDistance += dist;
                     }
                 }
             }
 
-            // Dodajemy nowy punkt do historii
             history.push([parsedLat, parsedLng]);
 
-            // Zapisujemy lub aktualizujemy w bazie danych
             db.run(`INSERT INTO workers (id, name, lat, lng, totalDistance, history, time) 
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET 
@@ -113,24 +118,14 @@ app.get('/update', (req, res) => {
                 (err) => {
                     if (err) {
                         console.error("Błąd zapisu do bazy:", err);
-                        return res.status(500).send({ error: "Błąd bazy danych" });
+                        return;
                     }
-
-                    // Wysyłamy zaktualizowane dane do taty przez WebSocket
+                    // Rozsyłamy odświeżone dane do wszystkich otwartych map
                     sendAllWorkers(io);
-                    res.send({ status: "OK", totalDistance: totalDistance.toFixed(2) });
                 }
             );
         });
-    } else {
-        res.status(400).send({ error: "Brak danych (id, lat, lng)" });
-    }
-});
-
-io.on('connection', (socket) => {
-    console.log('Tata otworzył panel mapy.');
-    // Wysyłamy pełną historię i dane z bazy, gdy tata wchodzi na stronę
-    sendAllWorkers(socket);
+    });
 });
 
 const PORT = process.env.PORT || 3000;
