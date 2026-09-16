@@ -2,107 +2,172 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <title>Panel GPS - Interfach</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Tracker - Pracownik</title>
+    <!-- Biblioteka Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- Biblioteka Socket.io z CDN (rozwiązuje błąd io is not defined) -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
-        body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: #111; color: white; }
-        header { padding: 15px 25px; background: #1a1a1a; border-bottom: 1px solid #333; font-weight: bold; font-size: 16px; }
-        #map { height: calc(100vh - 55px); width: 100%; }
+        body { font-family: sans-serif; text-align: center; padding: 40px; background: #222; color: white; }
+        button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; }
+        button.stop { background: #dc3545; }
+        #status { margin-top: 20px; font-size: 16px; color: #aaa; }
     </style>
 </head>
 <body>
 
-    <header>📍 System Śledzenia Floty Interfach - Radom i okolice (Z Historią Tras i Dystansem)</header>
-    <div id="map"></div>
+    <h2>Panel Pracownika</h2>
+    <p>Wciśnij start, aby udostępniać lokalizację na żywo oraz zarejestrować czas i trasę pracy.</p>
+    
+    <br>
+    <input type="text" id="workerName" placeholder="Twoje imię (np. Jan Kowalski)" style="padding: 10px; width: 80%; max-width: 300px; margin-bottom: 15px;"><br>
+    
+    <button id="toggleBtn" onclick="toggleTracking()">Rozpocznij jazdę</button>
+    <div id="status">Status: Zatrzymany</div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
     <script>
-        // Inicjalizacja mapy na Radom
-        const map = L.map('map').setView([51.4027, 21.1471], 13);
+        // --- 1. ZMIENNE GLOBALNE (MUSZĄ BYĆ NA ZEWNĄTRZ I NA GÓRZE) ---
+        let watchId = null;
+        let lastLat = null;
+        let lastLng = null;
+        let przebytyDystansKm = 0;
+        let wejscieZapisane = false;
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 19,
-            attribution: '© OpenStreetMap'
-        }).addTo(map);
-
+        // --- 2. INICJALIZACJA SOCKET.IO ORAZ SUPABASE ---
         const socket = io("https://gps-interfach.onrender.com");
-        let markers = {};
-        let polylines = {};
 
-        // Obliczanie dystansu w km (Wzór Haversine)
-        function calculateTotalDistance(history) {
-            if (!history || history.length < 2) return (0).toFixed(2);
-            let totalKm = 0;
-            
-            function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
-                const R = 6371;
-                const dLat = (lat2 - lat1) * (Math.PI / 180);
-                const dLon = (lon2 - lon1) * (Math.PI / 180);
-                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                          Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-                          Math.sin(dLon / 2) * Math.sin(dLon / 2);
-                return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-            }
+        const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-            for (let i = 0; i < history.length - 1; i++) {
-                const p1 = history[i];
-                const p2 = history[i + 1];
-                const lat1 = Array.isArray(p1) ? p1[0] : p1.lat;
-                const lon1 = Array.isArray(p1) ? p1[1] : p1.lng;
-                const lat2 = Array.isArray(p2) ? p2[0] : p2.lat;
-                const lon2 = Array.isArray(p2) ? p2[1] : p2.lng;
-
-                totalKm += getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2);
-            }
-
-            return totalKm.toFixed(2);
+        // Obliczanie odległości w km (Haversine)
+        function obliczDystans(lat1, lon1, lat2, lon2) {
+            const R = 6371; 
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
         }
 
-        socket.on('updateMap', (workers) => {
-            // Czyszczenie obiektów nieaktywnych kierowców
-            for (let id in markers) {
-                if (!workers[id]) {
-                    map.removeLayer(markers[id]);
-                    delete markers[id];
-                }
-            }
-            for (let id in polylines) {
-                if (!workers[id]) {
-                    map.removeLayer(polylines[id]);
-                    delete polylines[id];
-                }
-            }
+        // Zapis do bazy Supabase
+        async function zapiszWbazie(typAkcji) {
+            const nameInput = document.getElementById('workerName').value.trim() || "Anonim";
+            const dystansDoZapisu = (typAkcji === "Wejście") ? 0 : parseFloat(przebytyDystansKm.toFixed(2));
 
-            // Rysowanie i aktualizacja pozycji na mapie
-            for (let id in workers) {
-                let worker = workers[id];
-                let distance = calculateTotalDistance(worker.history);
-                
-                let popupContent = `<b>${worker.name}</b><br>` +
-                                   `Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}<br>` +
-                                   `🚗 Przebyty dystans: <b>${distance} km</b>`;
-
-                if (markers[id]) {
-                    markers[id].setLatLng([worker.lat, worker.lng]);
-                    markers[id].setPopupContent(popupContent);
-                } else {
-                    markers[id] = L.marker([worker.lat, worker.lng]).addTo(map).bindPopup(popupContent);
-                }
-
-                if (worker.history && worker.history.length > 0) {
-                    if (polylines[id]) {
-                        polylines[id].setLatLngs(worker.history);
-                    } else {
-                        polylines[id] = L.polyline(worker.history, {
-                            color: '#e74c3c',
-                            weight: 4,
-                            opacity: 0.8
-                        }).addTo(map);
+            const { error } = await supabaseClient
+                .from('attendance')
+                .insert([
+                    { 
+                        imie_nazwisko: nameInput, 
+                        typ: typAkcji, 
+                        kilometry: dystansDoZapisu,
+                        szerokosc: lastLat, 
+                        dlugosc: lastLng 
                     }
-                }
+                ]);
+
+            if (error) {
+                console.error("Błąd Supabase:", error);
+            } else {
+                console.log(`Supabase: Zapisano ${typAkcji} (${dystansDoZapisu} km)`);
             }
-        });
+        }
+
+        // Transmisja pozycji na żywo do mapy admina
+        function wyslijNaZywo(imie, lat, lng) {
+            if (socket) {
+                socket.emit('updateLocation', {
+                    name: imie,
+                    lat: lat,
+                    lng: lng,
+                    time: Date.now()
+                });
+            }
+        }
+
+        function toggleTracking() {
+            const btn = document.getElementById('toggleBtn');
+            const statusDiv = document.getElementById('status');
+            const workerName = document.getElementById('workerName').value.trim();
+
+            if (watchId === null) {
+                if (!workerName) {
+                    alert("Wpisz swoje imię przed rozpoczęciem!");
+                    return;
+                }
+
+                if (!navigator.geolocation) {
+                    alert("Twoja przeglądarka nie obsługuje GPS!");
+                    return;
+                }
+
+                przebytyDystansKm = 0;
+                lastLat = null;
+                lastLng = null;
+
+                btn.textContent = "Zatrzymaj trasę";
+                btn.className = "stop";
+                statusDiv.textContent = "Szukanie sygnału GPS...";
+
+                watchId = navigator.geolocation.watchPosition(
+                    async (position) => {
+                        const newLat = position.coords.latitude;
+                        const newLng = position.coords.longitude;
+                        
+                        if (lastLat !== null && lastLng !== null) {
+                            const d = obliczDystans(lastLat, lastLng, newLat, newLng);
+                            if (d > 0.005) {
+                                przebytyDystansKm += d;
+                            }
+                        }
+
+                        lastLat = newLat;
+                        lastLng = newLng;
+                        
+                        statusDiv.innerHTML = `Status: W trasie<br>Przebyty dystans: <b>${przebytyDystansKm.toFixed(2)} km</b><br>Szer: ${lastLat.toFixed(4)}, Dł: ${lastLng.toFixed(4)}`;
+
+                        wyslijNaZywo(workerName, lastLat, lastLng);
+
+                        if (watchId && !wejscieZapisane) {
+                            wejscieZapisane = true;
+                            await zapiszWbazie("Wejście");
+                        }
+                    },
+                    (error) => {
+                        alert("Błąd GPS: " + error.message);
+                        stopTracking();
+                    },
+                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+                );
+            } else {
+                stopTracking();
+            }
+        }
+
+        async function stopTracking() {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+
+            const statusDiv = document.getElementById('status');
+
+            if (wejscieZapisane) {
+                await zapiszWbazie("Wyjście");
+                wejscieZapisane = false;
+                statusDiv.textContent = `Status: Zatrzymany (Zapisano Wyjście, dystans: ${przebytyDystansKm.toFixed(2)} km)`;
+            } else {
+                statusDiv.textContent = "Status: Zatrzymany";
+            }
+
+            document.getElementById('toggleBtn').textContent = "Rozpocznij jazdę";
+            document.getElementById('toggleBtn').className = "";
+        }
     </script>
 </body>
 </html>

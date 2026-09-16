@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel GPS - Interfach</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: #111; color: white; }
+        header { padding: 15px 25px; background: #1a1a1a; border-bottom: 1px solid #333; font-weight: bold; font-size: 16px; }
+        #map { height: calc(100vh - 55px); width: 100%; }
+    </style>
+</head>
+<body>
+
+    <header>📍 System Śledzenia Floty Interfach - Radom i okolice (Z Historią Tras i Dystansem)</header>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Inicjalizacja mapy na Radom
+        const map = L.map('map').setView([51.4027, 21.1471], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        const socket = io("https://gps-interfach.onrender.com");
+        let markers = {};
+        let polylines = {};
+
+        // Obliczanie dystansu w km (Wzór Haversine)
+        function calculateTotalDistance(history) {
+            if (!history || history.length < 2) return (0).toFixed(2);
+            let totalKm = 0;
+            
+            function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+                const R = 6371;
+                const dLat = (lat2 - lat1) * (Math.PI / 180);
+                const dLon = (lon2 - lon1) * (Math.PI / 180);
+                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                          Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+                          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+            }
+
+            for (let i = 0; i < history.length - 1; i++) {
+                const p1 = history[i];
+                const p2 = history[i + 1];
+                const lat1 = Array.isArray(p1) ? p1[0] : p1.lat;
+                const lon1 = Array.isArray(p1) ? p1[1] : p1.lng;
+                const lat2 = Array.isArray(p2) ? p2[0] : p2.lat;
+                const lon2 = Array.isArray(p2) ? p2[1] : p2.lng;
+
+                totalKm += getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2);
+            }
+
+            return totalKm.toFixed(2);
+        }
+
+        socket.on('updateMap', (workers) => {
+            // Czyszczenie obiektów nieaktywnych kierowców
+            for (let id in markers) {
+                if (!workers[id]) {
+                    map.removeLayer(markers[id]);
+                    delete markers[id];
+                }
+            }
+            for (let id in polylines) {
+                if (!workers[id]) {
+                    map.removeLayer(polylines[id]);
+                    delete polylines[id];
+                }
+            }
+
+            // Rysowanie i aktualizacja pozycji na mapie
+            for (let id in workers) {
+                let worker = workers[id];
+                let distance = calculateTotalDistance(worker.history);
+                
+                let popupContent = `<b>${worker.name}</b><br>` +
+                                   `Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}<br>` +
+                                   `🚗 Przebyty dystans: <b>${distance} km</b>`;
+
+                if (markers[id]) {
+                    markers[id].setLatLng([worker.lat, worker.lng]);
+                    markers[id].setPopupContent(popupContent);
+                } else {
+                    markers[id] = L.marker([worker.lat, worker.lng]).addTo(map).bindPopup(popupContent);
+                }
+
+                if (worker.history && worker.history.length > 0) {
+                    if (polylines[id]) {
+                        polylines[id].setLatLngs(worker.history);
+                    } else {
+                        polylines[id] = L.polyline(worker.history, {
+                            color: '#e74c3c',
+                            weight: 4,
+                            opacity: 0.8
+                        }).addTo(map);
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
