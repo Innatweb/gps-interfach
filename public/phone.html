@@ -6,7 +6,8 @@
     <title>GPS Tracker - Pracownik</title>
     <!-- Biblioteka Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <!-- Biblioteka Socket.io z CDN (rozwiązuje błąd io is not defined) -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 40px; background: #222; color: white; }
         button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; }
@@ -26,20 +27,21 @@
     <div id="status">Status: Zatrzymany</div>
 
     <script>
-
-        const socket = io()
-        // --- KONFIGURACJA SUPABASE ---
-        const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
-        const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
-        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
+        // --- 1. ZMIENNE GLOBALNE (MUSZĄ BYĆ NA ZEWNĄTRZ I NA GÓRZE) ---
         let watchId = null;
         let lastLat = null;
         let lastLng = null;
         let przebytyDystansKm = 0;
         let wejscieZapisane = false;
 
-        // Matematyczne przeliczanie różnicy współrzędnych na kilometry
+        // --- 2. INICJALIZACJA SOCKET.IO ORAZ SUPABASE ---
+        const socket = typeof io !== 'undefined' ? io() : null;
+
+        const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
+        const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // Obliczanie odległości w km (Haversine)
         function obliczDystans(lat1, lon1, lat2, lon2) {
             const R = 6371; 
             const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -52,11 +54,9 @@
             return R * c;
         }
 
-        // Zapis do Supabase z uwzględnieniem kolumny 'kilometry'
+        // Zapis do bazy Supabase
         async function zapiszWbazie(typAkcji) {
             const nameInput = document.getElementById('workerName').value.trim() || "Anonim";
-            
-            // Dla "Wejścia" dystans wynosi 0, dla "Wyjścia" zapisujemy pełną przebyta trasę
             const dystansDoZapisu = (typAkcji === "Wejście") ? 0 : parseFloat(przebytyDystansKm.toFixed(2));
 
             const { error } = await supabaseClient
@@ -78,16 +78,17 @@
             }
         }
 
+        // Transmisja pozycji na żywo do mapy admina
         function wyslijNaZywo(imie, lat, lng) {
-    if (socket) {
-        socket.emit('updateLocation', {
-            name: imie,
-            lat: lat,
-            lng: lng,
-            time: Date.now()
-        });
-    }
-}
+            if (socket) {
+                socket.emit('updateLocation', {
+                    name: imie,
+                    lat: lat,
+                    lng: lng,
+                    time: Date.now()
+                });
+            }
+        }
 
         function toggleTracking() {
             const btn = document.getElementById('toggleBtn');
@@ -97,6 +98,11 @@
             if (watchId === null) {
                 if (!workerName) {
                     alert("Wpisz swoje imię przed rozpoczęciem!");
+                    return;
+                }
+
+                if (!navigator.geolocation) {
+                    alert("Twoja przeglądarka nie obsługuje GPS!");
                     return;
                 }
 
@@ -113,10 +119,8 @@
                         const newLat = position.coords.latitude;
                         const newLng = position.coords.longitude;
                         
-                        // Naliczanie kilometrów przy przesunięciu pozycji
                         if (lastLat !== null && lastLng !== null) {
                             const d = obliczDystans(lastLat, lastLng, newLat, newLng);
-                            // Filtrowanie drobnego szumu GPS (zlicza ruch większy niż 5 metrów)
                             if (d > 0.005) {
                                 przebytyDystansKm += d;
                             }
