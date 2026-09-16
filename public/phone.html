@@ -35,7 +35,7 @@
         let wejscieZapisane = false;
 
         // --- 2. INICJALIZACJA SOCKET.IO ORAZ SUPABASE ---
-        const socket = typeof io !== 'undefined' ? io() : null;
+        const socket = io("https://interfach-gps.onrender.com");
 
         const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
         const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
