@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Tracker - Pracownik</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 40px; background: #222; color: white; }
+        button { padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; }
+        button.stop { background: #dc3545; }
+        #status { margin-top: 20px; font-size: 16px; color: #aaa; }
+    </style>
+</head>
+<body>
+
+    <h2>Panel Pracownika</h2>
+    <p>Wciśnij start, aby udostępniać swoją lokalizację szefowi.</p>
+    
+    <br>
+    <input type="text" id="workerName" placeholder="Twoje imię (np. Jan Kowalski)" style="padding: 10px; width: 80%; max-width: 300px; margin-bottom: 15px;"><br>
+    
+    <button id="toggleBtn" onclick="toggleTracking()">Rozpocznij jazdę</button>
+    <div id="status">Status: Zatrzymany</div>
+
+    <script>
+        let watchId = null;
+        const workerId = "pracownik_" + Math.floor(Math.random() * 1000);
+
+        function toggleTracking() {
+            const btn = document.getElementById('toggleBtn');
+            const statusDiv = document.getElementById('status');
+            const nameInput = document.getElementById('workerName').value || "Pracownik";
+
+            if (watchId === null) {
+                if (!navigator.geolocation) {
+                    alert("Twoja przeglądarka nie wspiera GPS!");
+                    return;
+                }
+
+                btn.textContent = "Zatrzymaj trasę";
+                btn.className = "stop";
+                statusDiv.textContent = "Status: Wysyłanie pozycji GPS...";
+
+                watchId = navigator.geolocation.watchPosition(
+                    (position) => {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        
+                        statusDiv.innerHTML = `Status: W trasie<br>Szer: ${lat.toFixed(4)}, Dł: ${lng.toFixed(4)}`;
+
+                        fetch(`/update?id=${workerId}&name=${encodeURIComponent(nameInput)}&lat=${lat}&lng=${lng}`)
+                            .catch(err => console.error("Błąd wysyłania GPS:", err));
+                    },
+                    (error) => {
+                        alert("Błąd GPS: " + error.message);
+                        stopTracking();
+                    },
+                    { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+                );
+            } else {
+                stopTracking();
+            }
+        }
+
+        function stopTracking() {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+            document.getElementById('toggleBtn').textContent = "Rozpocznij jazdę";
+            document.getElementById('toggleBtn').className = "";
+            document.getElementById('status').textContent = "Status: Zatrzymany";
+        }
+    </script>
+</body>
+</html>

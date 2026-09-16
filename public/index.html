@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel GPS - Interfach</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; background: #111; color: white; }
+        header { padding: 15px 25px; background: #1a1a1a; border-bottom: 1px solid #333; font-weight: bold; font-size: 16px; }
+        #map { height: calc(100vh - 55px); width: 100%; }
+    </style>
+</head>
+<body>
+
+    <header>📍 System Śledzenia Floty Interfach - Radom i okolice (Z Historią Tras)</header>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Inicjalizacja mapy na Radom
+        const map = L.map('map').setView([51.4027, 21.1471], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        const socket = io();
+        let markers = {};
+        let polylines = {}; // Słownik przechowujący linie trasy dla każdego pracownika
+
+        // Nasłuchiwanie na aktualizacje pozycji z serwera
+        socket.on('updateMap', (workers) => {
+            for (let id in workers) {
+                let worker = workers[id];
+                
+                // 1. Aktualizacja lub tworzenie markera (punktu)
+                if (markers[id]) {
+                    markers[id].setLatLng([worker.lat, worker.lng]);
+                    markers[id].setPopupContent(`<b>${worker.name}</b><br>Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}`);
+                } else {
+                    markers[id] = L.marker([worker.lat, worker.lng]).addTo(map)
+                        .bindPopup(`<b>${worker.name}</b><br>Ostatnia aktualizacja: ${new Date(worker.time).toLocaleTimeString()}`);
+                }
+
+                // 2. Rysowanie / aktualizacja historii trasy (polilinia)
+                if (worker.history && worker.history.length > 0) {
+                    if (polylines[id]) {
+                        // Jeśli linia już istnieje, aktualizujemy jej współrzędne
+                        polylines[id].setLatLngs(worker.history);
+                    } else {
+                        // Jeśli nie, tworzymy nową czerwoną linię na mapie
+                        polylines[id] = L.polyline(worker.history, {
+                            color: 'red',
+                            weight: 4,
+                            opacity: 0.7
+                        }).addTo(map);
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
