@@ -1,35 +1,25 @@
 const express = require('express');
 const http = require('http');
+const cors = require('cors'); // Włączamy pakiet CORS
 const { Server } = require('socket.io');
-const sqlite3 = require('sqlite3').verbose();
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const server = http.createServer(app);
+
+// Odblokowanie CORS dla zapytań HTTP POST (rozwiązuje czerwony błąd z konsoli)
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
 const io = new Server(server, {
     cors: { origin: "*" }
 });
 
-// Włączamy obsługę przesyłania danych w formacie JSON (dla HTTP POST)
-app.use(express.json());
-app.use(express.static('public'));
-
-// Inicjalizacja bazy danych SQLite
-const db = new sqlite3.Database('./baza.db', (err) => {
-    if (err) {
-        console.error('Błąd otwierania bazy danych:', err.message);
-    } else {
-        console.log('Połączono z bazą danych SQLite.');
-        db.run(`CREATE TABLE IF NOT EXISTS workers (
-            id TEXT PRIMARY KEY,
-            name TEXT,
-            lat REAL,
-            lng REAL,
-            totalDistance REAL,
-            history TEXT,
-            time TEXT
-        )`);
-    }
-});
+// Konfiguracja i połączenie z Supabase
+const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // Obliczanie dystansu w km (Haversine)
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -44,13 +34,16 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-// Wysyłanie aktualnych pozycji i historii z bazy danych do mapy
-function sendAllWorkers(socketOrIo) {
-    db.all(`SELECT * FROM workers`, [], (err, rows) => {
-        if (err) {
-            console.error("Błąd pobierania z bazy:", err);
+// Pobieranie wszystkich pracowników z Supabase i wysyłanie na mapę admina
+async function sendAllWorkers(socketOrIo) {
+    try {
+        const { data: rows, error } = await supabase.from('workers').select('*');
+        
+        if (error) {
+            console.error("Błąd pobierania z Supabase:", error.message);
             return;
         }
+
         let workersLocations = {};
         rows.forEach(row => {
             workersLocations[row.id] = {
@@ -59,16 +52,19 @@ function sendAllWorkers(socketOrIo) {
                 lat: row.lat,
                 lng: row.lng,
                 totalDistance: row.totalDistance || 0,
-                history: JSON.parse(row.history || '[]'),
+                history: typeof row.history === 'string' ? JSON.parse(row.history || '[]') : (row.history || []),
                 time: row.time
             };
         });
+        
         socketOrIo.emit('updateMap', workersLocations);
-    });
+    } catch (err) {
+        console.error("Błąd w sendAllWorkers:", err.message);
+    }
 }
 
-// Główna funkcja zapisująca pozycję w bazie i przeliczająca dystans
-function updateWorkerLocation(name, lat, lng, callback) {
+// Aktualizacja pozycji pracownika w bazie Supabase
+async function updateWorkerLocation(name, lat, lng, callback) {
     const id = name; 
     const parsedLat = parseFloat(lat);
     const parsedLng = parseFloat(lng);
@@ -79,22 +75,28 @@ function updateWorkerLocation(name, lat, lng, callback) {
         return;
     }
 
-    db.get(`SELECT * FROM workers WHERE id = ?`, [id], (err, row) => {
+    try {
+        const { data: worker } = await supabase
+            .from('workers')
+            .select('*')
+            .eq('id', id)
+            .maybeSingle();
+
         let history = [];
         let totalDistance = 0;
         let workerName = name;
 
-        if (row) {
-            workerName = row.name || name;
+        if (worker) {
+            workerName = worker.name || name;
             try {
-                history = JSON.parse(row.history || '[]');
+                history = typeof worker.history === 'string' ? JSON.parse(worker.history || '[]') : (worker.history || []);
             } catch(e) { history = []; }
-            totalDistance = row.totalDistance || 0;
+            totalDistance = worker.totalDistance || 0;
 
             if (history.length > 0) {
                 const lastPoint = history[history.length - 1];
                 const dist = calculateDistance(lastPoint[0], lastPoint[1], parsedLat, parsedLng);
-                if (dist > 0.002) { // Zapisujemy przesunięcia powyżej 2 metrów
+                if (dist > 0.002) {
                     totalDistance += dist;
                 }
             }
@@ -102,31 +104,34 @@ function updateWorkerLocation(name, lat, lng, callback) {
 
         history.push([parsedLat, parsedLng]);
 
-        db.run(`INSERT INTO workers (id, name, lat, lng, totalDistance, history, time) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET 
-                name = excluded.name,
-                lat = excluded.lat,
-                lng = excluded.lng,
-                totalDistance = excluded.totalDistance,
-                history = excluded.history,
-                time = excluded.time`,
-            [id, workerName, parsedLat, parsedLng, totalDistance, JSON.stringify(history), currentTime],
-            (err) => {
-                if (err) {
-                    console.error("Błąd zapisu do bazy:", err);
-                    if (callback) callback(err);
-                    return;
-                }
-                // Rozsyłamy odświeżone dane do wszystkich otwartych map (Socket.io)
-                sendAllWorkers(io);
-                if (callback) callback(null);
-            }
-        );
-    });
+        const { error: upsertError } = await supabase
+            .from('workers')
+            .upsert({
+                id: id,
+                name: workerName,
+                lat: parsedLat,
+                lng: parsedLng,
+                totalDistance: totalDistance,
+                history: JSON.stringify(history),
+                time: currentTime
+            });
+
+        if (upsertError) {
+            console.error("Błąd zapisu w Supabase:", upsertError.message);
+            if (callback) callback(upsertError);
+            return;
+        }
+
+        await sendAllWorkers(io);
+        if (callback) callback(null);
+
+    } catch (err) {
+        console.error("Błąd w updateWorkerLocation:", err.message);
+        if (callback) callback(err);
+    }
 }
 
-// 1. ODBIÓR DANYCH PRZEZ HTTP POST (Z aplikacji w tle)
+// ODBIÓR DANYCH PRZEZ HTTP POST
 app.post('/api/location', (req, res) => {
     const { name, lat, lng } = req.body;
     updateWorkerLocation(name, lat, lng, (err) => {
@@ -137,14 +142,12 @@ app.post('/api/location', (req, res) => {
     });
 });
 
-// 2. OBSŁUGA POŁĄCZEŃ SOCKET.IO (Do wysyłania danych na mapę admina)
+// OBSŁUGA SOCKET.IO
 io.on('connection', (socket) => {
     console.log('Połączono klienta Socket.io:', socket.id);
     
-    // Wysyłamy istniejące dane zaraz po połączeniu mapy
     sendAllWorkers(socket);
 
-    // Awaryjna obsługa dla połączeń Socket.io
     socket.on('updateLocation', (data) => {
         const { name, lat, lng } = data;
         updateWorkerLocation(name || socket.id, lat, lng);
