@@ -11,6 +11,39 @@
     </style>
 </head>
 <body>
+    <!-- NAKŁADKA LOGOWANIA DO MAPY ADMINA -->
+<div id="loginOverlay" style="position:fixed; top:0; left:0; width:100%; height:100%; background:#111; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:white; font-family:sans-serif;">
+    <h2 style="margin-bottom:10px;">Panel Administratora</h2>
+    <p style="color:#aaa; margin-bottom:20px;">Podaj hasło dostępu do mapy na żywo:</p>
+    <input type="password" id="adminPass" placeholder="Hasło..." style="padding:12px; font-size:16px; margin-bottom:15px; border-radius:6px; border:1px solid #444; background:#222; color:white; text-align:center; outline:none;">
+    <button onclick="checkPassword()" style="padding:12px 25px; font-size:16px; background:#28a745; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">Zaloguj się</button>
+    <p id="passError" style="color:#dc3545; display:none; margin-top:15px; font-weight:bold;">Błędne hasło!</p>
+</div>
+
+<script>
+    // Ustaw swoje własne hasło poniżej:
+    const HASLO = "Vistec135#";
+
+    function checkPassword() {
+        const input = document.getElementById('adminPass').value;
+        if (input === HASLO) {
+            document.getElementById('loginOverlay').style.display = 'none';
+            sessionStorage.setItem('adminAuth', 'true');
+        } else {
+            document.getElementById('passError').style.display = 'block';
+        }
+    }
+
+    // Pozwala zalogować się po wciśnięciu Enter
+    document.getElementById('adminPass')?.addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') checkPassword();
+    });
+
+    // Automatyczne wpuszczenie, jeśli hasło wpisano już wcześniej w tej samej sesji
+    if (sessionStorage.getItem('adminAuth') === 'true') {
+        document.getElementById('loginOverlay').style.display = 'none';
+    }
+</script>
 
     <header>📍 System Śledzenia Floty Interfach - Radom i okolice (Z Historią Tras i Dystansem)</header>
     <div id="map"></div>
