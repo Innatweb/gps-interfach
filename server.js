@@ -1,6 +1,6 @@
 const express = require('express');
 const http = require('http');
-const cors = require('cors'); // Włączamy pakiet CORS
+const cors = require('cors');
 const { Server } = require('socket.io');
 const { createClient } = require('@supabase/supabase-js');
 const WebSocket = require('ws');
@@ -8,7 +8,7 @@ const WebSocket = require('ws');
 const app = express();
 const server = http.createServer(app);
 
-// Odblokowanie CORS dla zapytań HTTP POST (rozwiązuje czerwony błąd z konsoli)
+// Odblokowanie CORS dla zapytań HTTP
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
@@ -20,7 +20,9 @@ const io = new Server(server, {
 // Konfiguracja i połączenie z Supabase
 const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {realtime: {transport: WebSocket}});
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    realtime: { transport: WebSocket }
+});
 
 // Obliczanie dystansu w km (Haversine)
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -46,14 +48,21 @@ async function sendAllWorkers(socketOrIo) {
         }
 
         let workersLocations = {};
-        rows.forEach(row => {
+        (rows || []).forEach(row => {
+            let parsedHistory = [];
+            try {
+                parsedHistory = typeof row.history === 'string' ? JSON.parse(row.history || '[]') : (row.history || []);
+            } catch(e) {
+                parsedHistory = [];
+            }
+
             workersLocations[row.id] = {
                 id: row.id,
-                name: row.name,
+                name: row.name || row.id,
                 lat: row.lat,
                 lng: row.lng,
                 totalDistance: row.totaldistance || 0,
-                history: typeof row.history === 'string' ? JSON.parse(row.history || '[]') : (row.history || []),
+                history: parsedHistory,
                 time: row.time
             };
         });
@@ -72,39 +81,49 @@ async function updateWorkerLocation(name, lat, lng, callback) {
     const currentTime = new Date().toISOString();
 
     if (!id || isNaN(parsedLat) || isNaN(parsedLng)) {
-        if (callback) callback(new Error("Brak wymaganych danych GPS"));
+        const errStr = `Brak wymaganych danych GPS: name=${name}, lat=${lat}, lng=${lng}`;
+        console.error(errStr);
+        if (callback) callback(new Error(errStr));
         return;
     }
 
     try {
-        const { data: worker } = await supabase
+        // 1. Pobieramy obecny rekord z Supabase
+        const { data: worker, error: selectError } = await supabase
             .from('workers')
             .select('*')
             .eq('id', id)
             .maybeSingle();
 
+        if (selectError) {
+            console.error("Błąd odczytu z Supabase:", selectError.message);
+        }
+
         let history = [];
-        let totalDistance = 0;
+        let totalDist = 0;
         let workerName = name;
 
         if (worker) {
             workerName = worker.name || name;
             try {
                 history = typeof worker.history === 'string' ? JSON.parse(worker.history || '[]') : (worker.history || []);
-            } catch(e) { history = []; }
-            totalDistance = worker.totaldistance || 0;
+            } catch(e) { 
+                history = []; 
+            }
+            totalDist = worker.totaldistance || 0;
 
             if (history.length > 0) {
                 const lastPoint = history[history.length - 1];
                 const dist = calculateDistance(lastPoint[0], lastPoint[1], parsedLat, parsedLng);
-                if (dist > 0.002) {
-                    totalDistance += dist;
+                if (dist > 0.002) { // Zapis przesunięć > 2 metrów
+                    totalDist += dist;
                 }
             }
         }
 
         history.push([parsedLat, parsedLng]);
 
+        // 2. Zapisujemy/odświeżamy rekord w Supabase
         const { error: upsertError } = await supabase
             .from('workers')
             .upsert({
@@ -112,17 +131,18 @@ async function updateWorkerLocation(name, lat, lng, callback) {
                 name: workerName,
                 lat: parsedLat,
                 lng: parsedLng,
-                totalDistance: totaldistance,
+                totaldistance: totalDist,
                 history: JSON.stringify(history),
                 time: currentTime
             });
 
         if (upsertError) {
-            console.error("Błąd zapisu w Supabase:", upsertError.message);
+            console.error("Błąd upsert w Supabase:", upsertError.message);
             if (callback) callback(upsertError);
             return;
         }
 
+        // 3. Rozsyłamy odświeżoną mapę na żywo do admina
         await sendAllWorkers(io);
         if (callback) callback(null);
 
@@ -132,7 +152,7 @@ async function updateWorkerLocation(name, lat, lng, callback) {
     }
 }
 
-// ODBIÓR DANYCH PRZEZ HTTP POST
+// ODBIÓR DANYCH PRZEZ HTTP POST (Z aplikacji w tle)
 app.post('/api/location', (req, res) => {
     const { name, lat, lng } = req.body;
     updateWorkerLocation(name, lat, lng, (err) => {
@@ -143,10 +163,9 @@ app.post('/api/location', (req, res) => {
     });
 });
 
-// OBSŁUGA SOCKET.IO
+// OBSŁUGA SOCKET.IO (Dla otwartych map admina)
 io.on('connection', (socket) => {
     console.log('Połączono klienta Socket.io:', socket.id);
-    
     sendAllWorkers(socket);
 
     socket.on('updateLocation', (data) => {
