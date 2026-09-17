@@ -3,6 +3,7 @@ const http = require('http');
 const cors = require('cors'); // Włączamy pakiet CORS
 const { Server } = require('socket.io');
 const { createClient } = require('@supabase/supabase-js');
+const WebSocket = require('ws');
 
 const app = express();
 const server = http.createServer(app);
@@ -19,7 +20,7 @@ const io = new Server(server, {
 // Konfiguracja i połączenie z Supabase
 const SUPABASE_URL = 'https://qgemvebcaxntuzqfvvbf.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_PU8SsnsfMB7D7joLixO1Gw_GG0I3KwT';
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {realtime: {transport: WebSocket}});
 
 // Obliczanie dystansu w km (Haversine)
 function calculateDistance(lat1, lon1, lat2, lon2) {
