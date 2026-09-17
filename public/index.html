@@ -6,7 +6,7 @@
     <title>GPS Tracker - Pracownik</title>
     <!-- Biblioteka Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <!-- Biblioteka Socket.io z CDN (rozwiązuje błąd io is not defined) -->
+    <!-- Biblioteka Socket.io z CDN -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <style>
         body { font-family: sans-serif; text-align: center; padding: 40px; background: #222; color: white; }
@@ -27,7 +27,7 @@
     <div id="status">Status: Zatrzymany</div>
 
     <script>
-        // --- 1. ZMIENNE GLOBALNE (MUSZĄ BYĆ NA ZEWNĄTRZ I NA GÓRZE) ---
+        // --- 1. ZMIENNE GLOBALNE ---
         let watchId = null;
         let lastLat = null;
         let lastLng = null;
@@ -78,15 +78,23 @@
             }
         }
 
-        // Transmisja pozycji na żywo do mapy admina
-        function wyslijNaZywo(imie, lat, lng) {
-            if (socket) {
-                socket.emit('updateLocation', {
-                    name: imie,
-                    lat: lat,
-                    lng: lng,
-                    time: Date.now()
+        // Transmisja pozycji przez HTTP POST (odporna na rozłączanie w tle)
+        async function wyslijNaZywo(imie, lat, lng) {
+            try {
+                await fetch('https://gps-interfach.onrender.com/api/location', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: imie,
+                        lat: lat,
+                        lng: lng
+                    })
                 });
+                console.log("Pozycja przesłana przez HTTP");
+            } catch (err) {
+                console.error("Błąd wysyłania pozycji przez HTTP:", err);
             }
         }
 

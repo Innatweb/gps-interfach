@@ -9,6 +9,10 @@ const io = new Server(server, {
     cors: { origin: "*" }
 });
 
+// Włączamy obsługę przesyłania danych w formacie JSON (dla HTTP POST)
+app.use(express.json());
+app.use(express.static('public'));
+
 // Inicjalizacja bazy danych SQLite
 const db = new sqlite3.Database('./baza.db', (err) => {
     if (err) {
@@ -26,8 +30,6 @@ const db = new sqlite3.Database('./baza.db', (err) => {
         )`);
     }
 });
-
-app.use(express.static('public'));
 
 // Obliczanie dystansu w km (Haversine)
 function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -65,66 +67,87 @@ function sendAllWorkers(socketOrIo) {
     });
 }
 
-// OBSŁUGA POŁĄCZEŃ SOCKET.IO (Telefon + Mapa Admina)
+// Główna funkcja zapisująca pozycję w bazie i przeliczająca dystans
+function updateWorkerLocation(name, lat, lng, callback) {
+    const id = name; 
+    const parsedLat = parseFloat(lat);
+    const parsedLng = parseFloat(lng);
+    const currentTime = new Date().toISOString();
+
+    if (!id || isNaN(parsedLat) || isNaN(parsedLng)) {
+        if (callback) callback(new Error("Brak wymaganych danych GPS"));
+        return;
+    }
+
+    db.get(`SELECT * FROM workers WHERE id = ?`, [id], (err, row) => {
+        let history = [];
+        let totalDistance = 0;
+        let workerName = name;
+
+        if (row) {
+            workerName = row.name || name;
+            try {
+                history = JSON.parse(row.history || '[]');
+            } catch(e) { history = []; }
+            totalDistance = row.totalDistance || 0;
+
+            if (history.length > 0) {
+                const lastPoint = history[history.length - 1];
+                const dist = calculateDistance(lastPoint[0], lastPoint[1], parsedLat, parsedLng);
+                if (dist > 0.002) { // Zapisujemy przesunięcia powyżej 2 metrów
+                    totalDistance += dist;
+                }
+            }
+        }
+
+        history.push([parsedLat, parsedLng]);
+
+        db.run(`INSERT INTO workers (id, name, lat, lng, totalDistance, history, time) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET 
+                name = excluded.name,
+                lat = excluded.lat,
+                lng = excluded.lng,
+                totalDistance = excluded.totalDistance,
+                history = excluded.history,
+                time = excluded.time`,
+            [id, workerName, parsedLat, parsedLng, totalDistance, JSON.stringify(history), currentTime],
+            (err) => {
+                if (err) {
+                    console.error("Błąd zapisu do bazy:", err);
+                    if (callback) callback(err);
+                    return;
+                }
+                // Rozsyłamy odświeżone dane do wszystkich otwartych map (Socket.io)
+                sendAllWorkers(io);
+                if (callback) callback(null);
+            }
+        );
+    });
+}
+
+// 1. ODBIÓR DANYCH PRZEZ HTTP POST (Z aplikacji w tle)
+app.post('/api/location', (req, res) => {
+    const { name, lat, lng } = req.body;
+    updateWorkerLocation(name, lat, lng, (err) => {
+        if (err) {
+            return res.status(400).json({ error: err.message });
+        }
+        res.json({ status: 'ok' });
+    });
+});
+
+// 2. OBSŁUGA POŁĄCZEŃ SOCKET.IO (Do wysyłania danych na mapę admina)
 io.on('connection', (socket) => {
     console.log('Połączono klienta Socket.io:', socket.id);
     
-    // Wysyłamy istniejące dane zaraz po połączeniu
+    // Wysyłamy istniejące dane zaraz po połączeniu mapy
     sendAllWorkers(socket);
 
-    // Odbieranie współrzędnych wysyłanych z phone.html
+    // Awaryjna obsługa dla połączeń Socket.io
     socket.on('updateLocation', (data) => {
         const { name, lat, lng } = data;
-        const id = name || socket.id; 
-        const parsedLat = parseFloat(lat);
-        const parsedLng = parseFloat(lng);
-        const currentTime = new Date().toISOString();
-
-        if (!id || isNaN(parsedLat) || isNaN(parsedLng)) return;
-
-        db.get(`SELECT * FROM workers WHERE id = ?`, [id], (err, row) => {
-            let history = [];
-            let totalDistance = 0;
-            let workerName = name || `Pracownik ${id}`;
-
-            if (row) {
-                workerName = name || row.name;
-                try {
-                    history = JSON.parse(row.history || '[]');
-                } catch(e) { history = []; }
-                totalDistance = row.totalDistance || 0;
-
-                if (history.length > 0) {
-                    const lastPoint = history[history.length - 1];
-                    const dist = calculateDistance(lastPoint[0], lastPoint[1], parsedLat, parsedLng);
-                    if (dist > 0.002) { // Zapisujemy przesunięcia powyżej 2 metrów
-                        totalDistance += dist;
-                    }
-                }
-            }
-
-            history.push([parsedLat, parsedLng]);
-
-            db.run(`INSERT INTO workers (id, name, lat, lng, totalDistance, history, time) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET 
-                    name = excluded.name,
-                    lat = excluded.lat,
-                    lng = excluded.lng,
-                    totalDistance = excluded.totalDistance,
-                    history = excluded.history,
-                    time = excluded.time`,
-                [id, workerName, parsedLat, parsedLng, totalDistance, JSON.stringify(history), currentTime],
-                (err) => {
-                    if (err) {
-                        console.error("Błąd zapisu do bazy:", err);
-                        return;
-                    }
-                    // Rozsyłamy odświeżone dane do wszystkich otwartych map
-                    sendAllWorkers(io);
-                }
-            );
-        });
+        updateWorkerLocation(name || socket.id, lat, lng);
     });
 });
 
