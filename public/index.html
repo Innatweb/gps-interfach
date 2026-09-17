@@ -80,23 +80,29 @@
 
         // Transmisja pozycji przez HTTP POST (odporna na rozłączanie w tle)
         async function wyslijNaZywo(imie, lat, lng) {
-            try {
-                await fetch('https://gps-interfach.onrender.com/api/location', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        name: imie,
-                        lat: lat,
-                        lng: lng
-                    })
-                });
-                console.log("Pozycja przesłana przez HTTP");
-            } catch (err) {
-                console.error("Błąd wysyłania pozycji przez HTTP:", err);
-            }
+    try {
+        const res = await fetch('https://gps-interfach.onrender.com/api/location', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: imie,
+                lat: lat,
+                lng: lng
+            })
+        });
+
+        if (res.ok) {
+            console.log("Pozycja przesłana przez HTTP");
+        } else {
+            console.error("Błąd serwera HTTP:", res.status);
         }
+    } catch (err) {
+        console.error("Błąd sieci HTTP:", err);
+    }
+}
+        
 
         function toggleTracking() {
             const btn = document.getElementById('toggleBtn');

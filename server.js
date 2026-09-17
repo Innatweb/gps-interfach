@@ -52,7 +52,7 @@ async function sendAllWorkers(socketOrIo) {
                 name: row.name,
                 lat: row.lat,
                 lng: row.lng,
-                totalDistance: row.totalDistance || 0,
+                totalDistance: row.totaldistance || 0,
                 history: typeof row.history === 'string' ? JSON.parse(row.history || '[]') : (row.history || []),
                 time: row.time
             };
@@ -92,7 +92,7 @@ async function updateWorkerLocation(name, lat, lng, callback) {
             try {
                 history = typeof worker.history === 'string' ? JSON.parse(worker.history || '[]') : (worker.history || []);
             } catch(e) { history = []; }
-            totalDistance = worker.totalDistance || 0;
+            totalDistance = worker.totaldistance || 0;
 
             if (history.length > 0) {
                 const lastPoint = history[history.length - 1];
@@ -112,7 +112,7 @@ async function updateWorkerLocation(name, lat, lng, callback) {
                 name: workerName,
                 lat: parsedLat,
                 lng: parsedLng,
-                totalDistance: totalDistance,
+                totalDistance: totaldistance,
                 history: JSON.stringify(history),
                 time: currentTime
             });
