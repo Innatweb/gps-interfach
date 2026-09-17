@@ -74,6 +74,7 @@ async function sendAllWorkers(socketOrIo) {
 }
 
 // Aktualizacja pozycji pracownika w bazie Supabase
+// Aktualizacja pozycji pracownika w bazie Supabase
 async function updateWorkerLocation(name, lat, lng, callback) {
     const id = name; 
     const parsedLat = parseFloat(lat);
@@ -105,12 +106,24 @@ async function updateWorkerLocation(name, lat, lng, callback) {
 
         if (worker) {
             workerName = worker.name || name;
-            try {
-                history = typeof worker.history === 'string' ? JSON.parse(worker.history || '[]') : (worker.history || []);
-            } catch(e) { 
-                history = []; 
+
+            // Sprawdzamy, czy zmieniła się data (np. minęła północ)
+            const lastDate = worker.time ? new Date(worker.time).toLocaleDateString('pl-PL') : null;
+            const todayDate = new Date().toLocaleDateString('pl-PL');
+
+            if (lastDate && lastDate !== todayDate) {
+                // Nowy dzień – zerujemy trasę na żywo na mapie
+                history = [];
+                totalDist = 0;
+            } else {
+                // Ten sam dzień – wczytujemy dotychczasową trasę
+                try {
+                    history = typeof worker.history === 'string' ? JSON.parse(worker.history || '[]') : (worker.history || []);
+                } catch(e) { 
+                    history = []; 
+                }
+                totalDist = worker.totaldistance || 0;
             }
-            totalDist = worker.totaldistance || 0;
 
             if (history.length > 0) {
                 const lastPoint = history[history.length - 1];
