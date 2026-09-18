@@ -29,6 +29,7 @@
     <script>
         // --- 1. ZMIENNE GLOBALNE ---
         let watchId = null;
+        let wakeLock = null;
         let lastLat = null;
         let lastLng = null;
         let przebytyDystansKm = 0;
@@ -107,9 +108,21 @@
         console.error("Błąd połączenia HTTP:", err);
     }
 }
-        
+        async function requestWakeLock() {
+    if ('wakeLock' in navigator) {
+        try {
+            wakeLock = await navigator.wakeLock.request('screen');
+        } catch (err) { console.error(err); }
+    }
+}
 
-        function toggleTracking() {
+function releaseWakeLock() {
+    if (wakeLock !== null) {
+        wakeLock.release().then(() => { wakeLock = null; });
+    }
+}
+
+        async function toggleTracking() {
             const btn = document.getElementById('toggleBtn');
             const statusDiv = document.getElementById('status');
             const workerName = document.getElementById('workerName').value.trim();
@@ -133,6 +146,8 @@
                 btn.className = "stop";
                 statusDiv.textContent = "Szukanie sygnału GPS...";
 
+                await requestWakeLock();
+
                 watchId = navigator.geolocation.watchPosition(
                     async (position) => {
                         const newLat = position.coords.latitude;
@@ -140,7 +155,7 @@
                         
                         if (lastLat !== null && lastLng !== null) {
                             const d = obliczDystans(lastLat, lastLng, newLat, newLng);
-                            if (d > 0.005) {
+                            if (d > 0.003) {
                                 przebytyDystansKm += d;
                             }
                         }
@@ -161,7 +176,7 @@
                         alert("Błąd GPS: " + error.message);
                         stopTracking();
                     },
-                    { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
                 );
             } else {
                 stopTracking();
@@ -173,6 +188,8 @@
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
             }
+
+            releaseWakeLock();
 
             const statusDiv = document.getElementById('status');
 
