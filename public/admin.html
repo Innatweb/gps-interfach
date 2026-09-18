@@ -18,6 +18,8 @@
     <input type="password" id="adminPass" placeholder="Hasło..." style="padding:12px; font-size:16px; margin-bottom:15px; border-radius:6px; border:1px solid #444; background:#222; color:white; text-align:center; outline:none;">
     <button onclick="checkPassword()" style="padding:12px 25px; font-size:16px; background:#28a745; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">Zaloguj się</button>
     <p id="passError" style="color:#dc3545; display:none; margin-top:15px; font-weight:bold;">Błędne hasło!</p>
+    <button onclick="wyczyscMape()" style="background: #dc3545; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; margin-bottom: 10px;">
+</button>
 </div>
 
 <script>
@@ -177,4 +179,15 @@
                 }
             }
         });
+        function wyczyscMape() {
+    map.eachLayer((layer) => {
+        if (layer instanceof L.Marker) {
+            map.removeLayer(layer);
+        }
+    });
+    if (typeof markers !== 'undefined') {
+        markers = {};
+    }
+    alert("Mapa została wyczyszczona!");
+}
     </script>
