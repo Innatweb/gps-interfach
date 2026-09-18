@@ -28,7 +28,8 @@
 
     <script>
         // --- 1. ZMIENNE GLOBALNE ---
-        let watchId = null;
+        let watcherId = null;   // dla Capacitor APK
+        let watchId = null;     // dla zwykłej przeglądarki
         let wakeLock = null;
         let lastLat = null;
         let lastLng = null;
@@ -79,62 +80,69 @@
             }
         }
 
-        // Transmisja pozycji przez HTTP POST (odporna na rozłączanie w tle)
+        // Transmisja pozycji przez HTTP POST
         async function wyslijNaZywo(imie, lat, lng) {
-    if (!imie || !lat || !lng) {
-        console.error("Brak danych do wysyłki:", { imie, lat, lng });
-        return;
-    }
-    try {
-        const res = await fetch('https://gps-interfach.onrender.com/api/location', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                name: imie,
-                lat: lat,
-                lng: lng
-            })
-        });
+            if (!imie || !lat || !lng) return;
+            try {
+                const res = await fetch('https://gps-interfach.onrender.com/api/location', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: imie, lat: lat, lng: lng })
+                });
 
-        const data = await res.json();
-        if (res.ok) {
-            console.log("Pozycja przesłana pomyślnie przez HTTP:", data);
-        } else {
-            console.error("Powód błędu z serwera:", data.error);
+                const data = await res.json();
+                if (res.ok) {
+                    console.log("Pozycja przesłana pomyślnie przez HTTP:", data);
+                }
+            } catch (err) {
+                console.error("Błąd połączenia HTTP:", err);
+            }
         }
-    } catch (err) {
-        console.error("Błąd połączenia HTTP:", err);
-    }
-}
-        async function requestWakeLock() {
-    if ('wakeLock' in navigator) {
-        try {
-            wakeLock = await navigator.wakeLock.request('screen');
-        } catch (err) { console.error(err); }
-    }
-}
 
-function releaseWakeLock() {
-    if (wakeLock !== null) {
-        wakeLock.release().then(() => { wakeLock = null; });
-    }
-}
+        // Obsługa Screen Wake Lock dla przeglądarek
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {}
+            }
+        }
+
+        function releaseWakeLock() {
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => { wakeLock = null; });
+            }
+        }
+
+        // Przetwarzanie nowej pozycji GPS
+        async function obsluzNowaPozycje(newLat, newLng, workerName) {
+            if (lastLat !== null && lastLng !== null) {
+                const d = obliczDystans(lastLat, lastLng, newLat, newLng);
+                if (d > 0.003) {
+                    przebytyDystansKm += d;
+                }
+            }
+
+            lastLat = newLat;
+            lastLng = newLng;
+
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = `Status: W trasie<br>Dystans: <b>${przebytyDystansKm.toFixed(2)} km</b><br>Szer: ${lastLat.toFixed(4)}, Dł: ${lastLng.toFixed(4)}`;
+
+            wyslijNaZywo(workerName, lastLat, lastLng);
+
+            if (!wejscieZapisane) {
+                wejscieZapisane = true;
+                await zapiszWbazie("Wejście");
+            }
+        }
 
         async function toggleTracking() {
             const btn = document.getElementById('toggleBtn');
             const statusDiv = document.getElementById('status');
             const workerName = document.getElementById('workerName').value.trim();
 
-            if (watchId === null) {
+            if (watcherId === null && watchId === null) {
                 if (!workerName) {
                     alert("Wpisz swoje imię przed rozpoczęciem!");
-                    return;
-                }
-
-                if (!navigator.geolocation) {
-                    alert("Twoja przeglądarka nie obsługuje GPS!");
                     return;
                 }
 
@@ -144,46 +152,66 @@ function releaseWakeLock() {
 
                 btn.textContent = "Zatrzymaj trasę";
                 btn.className = "stop";
-                statusDiv.textContent = "Szukanie sygnału GPS...";
+                statusDiv.textContent = "Inicjalizacja GPS...";
 
-                await requestWakeLock();
+                const BackgroundGeolocation = window.Capacitor?.Plugins?.BackgroundGeolocation;
 
-                watchId = navigator.geolocation.watchPosition(
-                    async (position) => {
-                        const newLat = position.coords.latitude;
-                        const newLng = position.coords.longitude;
-                        
-                        if (lastLat !== null && lastLng !== null) {
-                            const d = obliczDystans(lastLat, lastLng, newLat, newLng);
-                            if (d > 0.003) {
-                                przebytyDystansKm += d;
+                if (BackgroundGeolocation) {
+                    // --- TRYB 1: NATYWNA APLIKACJA APK (Capacitor Background GPS) ---
+                    watcherId = await BackgroundGeolocation.addWatcher(
+                        {
+                            backgroundTitle: "System GPS Interfach",
+                            backgroundMessage: "Rejestrowanie trasy jest aktywne w tle.",
+                            requestPermissions: true,
+                            stale: false,
+                            distanceFilter: 5
+                        },
+                        async (location, error) => {
+                            if (error) {
+                                console.error("Błąd GPS w tle:", error);
+                                return;
+                            }
+                            if (location) {
+                                await obsluzNowaPozycje(location.latitude, location.longitude, workerName);
                             }
                         }
-
-                        lastLat = newLat;
-                        lastLng = newLng;
-                        
-                        statusDiv.innerHTML = `Status: W trasie<br>Przebyty dystans: <b>${przebytyDystansKm.toFixed(2)} km</b><br>Szer: ${lastLat.toFixed(4)}, Dł: ${lastLng.toFixed(4)}`;
-
-                        wyslijNaZywo(workerName, lastLat, lastLng);
-
-                        if (watchId && !wejscieZapisane) {
-                            wejscieZapisane = true;
-                            await zapiszWbazie("Wejście");
-                        }
-                    },
-                    (error) => {
-                        alert("Błąd GPS: " + error.message);
+                    );
+                } else {
+                    // --- TRYB 2: ZWYKŁA PRZEGLĄDARKA (Fallback) ---
+                    if (!navigator.geolocation) {
+                        alert("Twoja przeglądarka nie obsługuje GPS!");
                         stopTracking();
-                    },
-                    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-                );
+                        return;
+                    }
+
+                    await requestWakeLock();
+
+                    watchId = navigator.geolocation.watchPosition(
+                        async (position) => {
+                            await obsluzNowaPozycje(position.coords.latitude, position.coords.longitude, workerName);
+                        },
+                        (error) => {
+                            alert("Błąd GPS: " + error.message);
+                            stopTracking();
+                        },
+                        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+                    );
+                }
             } else {
                 stopTracking();
             }
         }
 
         async function stopTracking() {
+            const BackgroundGeolocation = window.Capacitor?.Plugins?.BackgroundGeolocation;
+
+            // Zatrzymaj śledzenie natywne
+            if (watcherId !== null && BackgroundGeolocation) {
+                await BackgroundGeolocation.removeWatcher({ id: watcherId });
+                watcherId = null;
+            }
+
+            // Zatrzymaj śledzenie w przeglądarce
             if (watchId !== null) {
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
@@ -196,7 +224,7 @@ function releaseWakeLock() {
             if (wejscieZapisane) {
                 await zapiszWbazie("Wyjście");
                 wejscieZapisane = false;
-                statusDiv.textContent = `Status: Zatrzymany (Zapisano Wyjście, dystans: ${przebytyDystansKm.toFixed(2)} km)`;
+                statusDiv.textContent = `Status: Zatrzymany (Dystans: ${przebytyDystansKm.toFixed(2)} km)`;
             } else {
                 statusDiv.textContent = "Status: Zatrzymany";
             }
